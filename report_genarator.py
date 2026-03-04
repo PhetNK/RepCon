@@ -122,23 +122,45 @@ class report_gen:
         if not os.path.exists(mlag_path):
             return None
             
-        pattern = r"^\s*(\d+)\s+([\w-]+)\s+(Po\d+)\s+(Po\d+)\s+([\w/]+)\s+([\w/]+)\s+(.*?)\s+(\d+)$"
         parsed_data = []
-        
+        col_indices = []
+
         with open(mlag_path, "r", encoding='utf-8', errors='ignore') as f:
-            for line in f:
-                match = re.match(pattern, line.strip())
-                if match:
-                    parsed_data.append({
-                        "MLAG": match.group(1),
-                        "State": match.group(2),
-                        "Local": match.group(3),
-                        "Remote": match.group(4),
-                        "Oper": match.group(5),
-                        "Config": match.group(6),
-                        "Last Change": match.group(7).strip(),
-                        "Changes": match.group(8)
-                    })
+            lines = f.readlines()
+            dash_line = ""
+            dash_line_idx = -1
+            for idx, line in enumerate(lines):
+                if line.strip().startswith("----") and " " in line:
+                    dash_line = line
+                    dash_line_idx = idx
+                    break
+            
+            if not dash_line:
+                return None
+            
+            import re
+            for m in re.finditer(r"(-+)", dash_line):
+                col_indices.append((m.start(), m.end()))
+
+            for line in lines[dash_line_idx + 1:]:
+                if not line.strip() or line.strip().startswith("Total"): 
+                    continue
+
+                try:
+                    row = {
+                        "MLAG":        line[col_indices[0][0]:col_indices[0][1]].strip(),
+                        "State":       line[col_indices[1][0]:col_indices[1][1]].strip(),
+                        "Local":       line[col_indices[2][0]:col_indices[2][1]].strip(),
+                        "Remote":      line[col_indices[3][0]:col_indices[3][1]].strip(),
+                        "Oper":        line[col_indices[4][0]:col_indices[4][1]].strip(),
+                        "Config":      line[col_indices[5][0]:col_indices[5][1]].strip(),
+                        "Last Change": line[col_indices[6][0]:col_indices[6][1]].strip(),
+                        "Changes":     line[col_indices[7][0]:col_indices[7][1]].strip()
+                    }
+                    parsed_data.append(row)
+                except IndexError:
+                    continue
+
         return pd.DataFrame(parsed_data) if parsed_data else None
 
     def get_report(self):
