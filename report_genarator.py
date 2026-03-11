@@ -4,90 +4,118 @@ import os
 import re
 
 class splite_config:
-    def __init__(self,logfile: str="",default_config:bool=False):
-        if not logfile: 
-            print(f"Not found file !")
+    def __init__(self, logfile: str="", default_config: bool=False):
+        '''
+        Initialize the splitter with log file and destination paths.
+        '''
+        if not logfile:
+            print(f"Error: Log file path is empty!")
             return None
         else: 
             self.logfile = logfile
 
-        file_name=os.path.basename(logfile).split('.')[0]
-        if default_config:
-            self.des = os.path.join(os.getcwd(),f"temp/{file_name}_old")
-        else:
-            self.des = os.path.join(os.getcwd(),f"temp/{file_name}_new")
+        # Extract filename and determine if it's 'old' or 'new' baseline
+        file_name = os.path.basename(logfile).split('.')[0]
+        suffix = "_old" if default_config else "_new"
+        self.des = os.path.join(os.getcwd(), f"temp/{file_name}{suffix}")
+        
+        # Ensure the temporary directory exists
         if not os.path.exists(self.des):
             os.makedirs(self.des)
 
-    def find(self,line:str):  
-        key="#" 
-        key_start=""
-        key_stop=""
-
+    def find(self, line: str):
+        '''
+        Identify the start of a command output using the '#' delimiter.
+        '''
+        key = "#" 
         for command in self.check_list:
-            if key+command in line.strip():
-                key_stop,key_start = line.strip().split("#")
-                return True,command,key_start,key_stop
-        return False,command,None,None
+            # Match SwitchName#command pattern
+            if key + command in line.strip():
+                key_stop, key_start = line.strip().split("#")
+                return True, command, key_start, key_stop
+        return False, None, None, None
 
     def split(self):
-        from config import commands
+        '''
+        Parse the master log file into individual command output files.
+        '''
+        from config import commands 
+        # Create a copy of commands to track what has been found
         self.check_list = commands.commands.copy()
         status = False
         buffer = ''
+        
         with open(self.logfile, "r") as f:
             for line in f:
+                # Check for prompt pattern to identify command boundaries
                 check_point = line.strip().split("#")
+                
                 if not status:
-                    status,command,key_start,key_stop = self.find(line)
+                    status, command, key_start, key_stop = self.find(line)
+                
                 if status:
                     buffer += line
+                    # Look for the return to prompt which signals command completion
                     if len(check_point) != 2:
                         continue
-                    if len(check_point) == 2 and check_point[1] != command :
+                    if len(check_point) == 2 and check_point[1] != command:
+                        # Clean command name for filename safety
                         filename = command.strip().replace("show ", "").replace(" ", "_") + ".txt"
-                        fullname = self.des +"\\"+ filename
-                        print(fullname)
-                        with open(fullname, "w", encoding="utf-8") as f:
-                            f.write(buffer)
+                        fullname = os.path.join(self.des, filename)
+                        
+                        # Save extracted output to a dedicated file
+                        with open(fullname, "w", encoding="utf-8") as f_out:
+                            f_out.write(buffer)
+                        
+                        print(f"Extraction complete: {fullname}")
                         self.check_list.remove(command)
                         buffer = ''
-                        status = False
-                        #print(buffer)                    
-                        if not self.check_list:
-                            break
-                        #recheck
-                        status,command,key_start,key_stop = self.find(line)
+                        status = False 
+                        
+                        # Stop early if all target commands are found
+                        if not self.check_list: break
+                        
+                        # Check if the current line starts the next command immediately
+                        status, command, key_start, key_stop = self.find(line)
                         if status: buffer = line
+                        
         return self.des
     
 class report_gen:
-    def __init__(self, old_folder: str = "", new_folder: str = "",des_folder:str=''):
+    def __init__(self, old_folder: str = "", new_folder: str = "", des_folder: str=''):
+        '''
+        Initialize report generator and prepare file lists.
+        '''
         if not os.path.exists(new_folder) or not os.path.exists(old_folder):
-            raise FileNotFoundError("Not found the Folder !")
+            raise FileNotFoundError("Input directories (old/new) must exist!")
         
         self.old_folder = old_folder
         self.new_folder = new_folder
-
+        
+        # Use sets to find intersection of files present in both snapshots
         self.old_files = set(os.listdir(old_folder))
         self.new_files = set(os.listdir(new_folder))
         self.common_files = sorted(list(self.old_files & self.new_files))
 
+        # Setup naming convention: report_[hostname]_[timestamp].xlsx
         hostname = os.path.basename(os.path.normpath(self.new_folder))
         date_str = datetime.now().strftime("%d%b%Y_%H-%M-%S")
+        base_name = f"report_{hostname}_{date_str}.xlsx"
         
-        base_name=f"report_{hostname}_{date_str}.xlsx"
         if des_folder:
-            self.rep_output = os.path.join(des_folder,base_name) 
+            self.rep_output = os.path.join(des_folder, base_name) 
         else:
-            self.rep_output =  self.des = os.path.join(os.getcwd(),f"report/{base_name}")
-            
+            self.rep_output = os.path.join(os.getcwd(), f"report/{base_name}")
 
     def get_file_diff_df(self, old_file_path, new_file_path):
+        '''
+        Compare configurations using a dictionary-based key-value approach.
+        '''
         if not os.path.exists(old_file_path) or not os.path.exists(new_file_path):
-            return pd.DataFrame({'Error': ['File not found']})
+            return pd.DataFrame({'Error': ['Missing file for comparison']})
             
         def file_to_dict(path):
+            # Parse line into key (first word) and value (rest of the line)
             data = {}
             with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                 for line in f:
@@ -102,50 +130,55 @@ class report_gen:
 
         old_dict = file_to_dict(old_file_path)
         new_dict = file_to_dict(new_file_path)
+        
+        # Union of all keys to ensure both added and removed lines are captured
         all_keys = sorted(set(old_dict.keys()) | set(new_dict.keys()))
-
+        
         old_col, new_col, status_col = [], [], []
+
         for key in all_keys:
             old_val = old_dict.get(key, "Not Present")
             new_val = new_dict.get(key, "Not Present")
-            old_full = f"{key} {old_val}" if key in old_dict else ""
-            new_full = f"{key} {new_val}" if key in new_dict else ""
             
-            old_col.append(old_full)
-            new_col.append(new_full)
+            # Reconstruct the full configuration line
+            old_col.append(f"{key} {old_val}" if key in old_dict else "")
+            new_col.append(f"{key} {new_val}" if key in new_dict else "")
+            
+            # Determine if the specific line has changed
             status_col.append('Same' if old_val == new_val else 'Changed')
-                
+
         return pd.DataFrame({'Old_Config': old_col, 'New_Config': new_col, 'Status': status_col})
-    
+
     def mlag_report(self, config_file="mlag_interfaces_detail.txt"):
+        '''
+        Parse MLAG detail status using fixed-width coordinate mapping.
+        '''
         mlag_path = os.path.join(self.new_folder, config_file)
         if not os.path.exists(mlag_path):
             return None
             
-        parsed_data = []
-        col_indices = []
-
+        parsed_data, col_indices = [], []
         with open(mlag_path, "r", encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
             dash_line = ""
             dash_line_idx = -1
+            
+            # Step 1: Locate the dash line (----) which acts as our ruler
             for idx, line in enumerate(lines):
                 if line.strip().startswith("----") and " " in line:
                     dash_line = line
                     dash_line_idx = idx
                     break
-            
-            if not dash_line:
-                return None
-            
-            import re
+
+            if not dash_line: return None
+                
+            # Step 2: Map start/end coordinates for each column found in the dash line
             for m in re.finditer(r"(-+)", dash_line):
                 col_indices.append((m.start(), m.end()))
 
+            # Step 3: Extract data by slicing each line based on the mapped coordinates
             for line in lines[dash_line_idx + 1:]:
-                if not line.strip() or line.strip().startswith("Total"): 
-                    continue
-
+                if not line.strip() or line.strip().startswith("Total"): continue
                 try:
                     row = {
                         "MLAG":        line[col_indices[0][0]:col_indices[0][1]].strip(),
@@ -158,43 +191,55 @@ class report_gen:
                         "Changes":     line[col_indices[7][0]:col_indices[7][1]].strip()
                     }
                     parsed_data.append(row)
-                except IndexError:
-                    continue
+                except IndexError: continue
 
         return pd.DataFrame(parsed_data) if parsed_data else None
 
     def get_report(self):
+        '''
+        Generate the final multi-sheet Excel report with conditional formatting.
+        '''
         with pd.ExcelWriter(self.rep_output, engine='xlsxwriter') as writer:
             workbook = writer.book
+            
+            # Define cell styles for better readability and highlighting
             red_format = workbook.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'border': 1})
             header_format = workbook.add_format({'bold': True, 'bg_color': '#D3D3D3', 'border': 1})
 
+            # Process each command file into a separate sheet
             for filename in self.common_files:
-                                
                 old_path = os.path.join(self.old_folder, filename)
                 new_path = os.path.join(self.new_folder, filename)
 
                 df = self.get_file_diff_df(old_path, new_path)
+                
+                # Excel sheet names have a 31-character limit
                 sheet_name = filename.replace('.txt', '')[:31]
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
 
                 worksheet = writer.sheets[sheet_name]
-                worksheet.set_column('A:B', 60)
+                
+                # Adjust column widths for configuration text and status
+                worksheet.set_column('A:B', 60) 
                 worksheet.set_column('C:C', 12)
 
+                # Format headers
                 for col_num, value in enumerate(df.columns.values):
                     worksheet.write(0, col_num, value, header_format)
                 
-                worksheet.conditional_format(1, 0, len(df), 1, {
+                # Highlight rows where Status is 'Changed' for quick review
+                worksheet.conditional_format(1, 0, len(df), 2, {
                     'type': 'formula', 'criteria': '=$C2="Changed"', 'format': red_format
                 })
 
+            # Add dedicated sheet for structured MLAG data
             df_mlag = self.mlag_report()
             if df_mlag is not None:
                 sheet_name = "MLAG_Detail"
                 df_mlag.to_excel(writer, sheet_name=sheet_name, index=False)
                 worksheet = writer.sheets[sheet_name]
                 
+                # Format MLAG columns
                 worksheet.set_column('A:F', 12)
                 worksheet.set_column('G:G', 30)
                 worksheet.set_column('H:H', 10)
@@ -202,4 +247,4 @@ class report_gen:
                 for col_num, value in enumerate(df_mlag.columns.values):
                     worksheet.write(0, col_num, value, header_format)
 
-        print(f"Complete to create report: {os.path.basename(self.rep_output)}")
+        print(f"Success! Report saved at: {self.rep_output}")
